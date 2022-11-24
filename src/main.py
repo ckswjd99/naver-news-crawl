@@ -4,7 +4,7 @@ import datetime
 from dateutil.parser import parse as parseDate
 from threading import Thread
 import os
-import tqdm
+from tqdm import tqdm
 
 import requests
 from bs4 import BeautifulSoup
@@ -66,7 +66,6 @@ def get_news(articleUrl):
 
 def get_ranking(officeId, date):
   # Get article
-  print(COLTEX['YELLOW'] + f'[{officeId}] Get rankings...')
   BROWSER.get(f'https://media.naver.com/press/{officeId}/ranking?type=comment&date={date}')
   time.sleep(1)
 
@@ -81,19 +80,22 @@ def create_dataset(officeId, startDate, endDate, savePath):
   oneday = datetime.timedelta(days=1)
 
   # Get ranked articles
-  print(COLTEX['YELLOW'] + f'[{officeId}] Get rankings...')
+  print(COLTEX['YELLOW'] + f'[{officeId}] Get rankings...' + COLTEX['WHITE'])
   articleUrls = set()
   
-  iterDate = startDate
-  while iterDate <= endDate:
-    dateString = iterDate.strftime("%Y%m%%d")
-    rankArticles = get_ranking(officeId, dateString)
-    articleUrls.update(rankArticles)
-    
-    iterDate = iterDate + oneday
+  with tqdm(total= (endDate - startDate).days) as pbar:
+    iterDate = startDate
+    while iterDate <= endDate:
+      pbar.update(1)
+      pbar.set_postfix({'searching date': iterDate})
+      dateString = iterDate.strftime("%Y%m%%d")
+      rankArticles = get_ranking(officeId, dateString)
+      articleUrls.update(rankArticles)
+      
+      iterDate = iterDate + oneday
 
   # Get articles
-  print(COLTEX['YELLOW'] + f'[{officeId}] Get Articles...')
+  print(COLTEX['YELLOW'] + f'[{officeId}] Get Articles...' + COLTEX['WHITE'])
   articles = []
   for articleUrl in tqdm(articleUrls):
     article = get_news(articleUrl)
@@ -119,7 +121,7 @@ def create_dataset(officeId, startDate, endDate, savePath):
 
 
 if __name__ == '__main__':
-  startDate = '20221123'
+  startDate = '20200101'
   endDate =   '20221124'
   savePath =  './data'
 
