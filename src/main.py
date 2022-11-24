@@ -18,81 +18,102 @@ from utils import targetOffices, COLTEX
 
 browserOptions = webdriver.ChromeOptions()
 browserOptions.add_argument("headless")
-browserOptions.add_argument("log-level=3")
 
 BROWSER = webdriver.Chrome(executable_path='chromedriver', options=browserOptions)
-
+EXPLICIT_DELAY=0.2
+RETRY = 20
 
 def get_news(articleUrl):
-  try:
-    # Config
-    rawdata = requests.get(articleUrl, headers={'User-Agent':'Mozilla/5.0'})
-    soup = BeautifulSoup(rawdata.content, "html.parser")
+  # Config
+  rawdata = requests.get(articleUrl, headers={'User-Agent':'Mozilla/5.0'})
+  soup = BeautifulSoup(rawdata.content, "html.parser")
 
-    # Get article
-    BROWSER.get(articleUrl)
-    time.sleep(1)
-
-    
-    # Check comment num
-    comment = BROWSER.find_element(By.CLASS_NAME, 'u_cbox_list')
-    commentNum = int(BROWSER.find_element(By.ID, 'comment_count').text.replace(',', ''))
-    if commentNum < 10:
-      return None
-
-    # Check comment like
-    bestCommentLike = int(comment.find_element(By.CLASS_NAME, 'u_cbox_cnt_recomm').text.replace(',', ''))
-    if bestCommentLike < 100:
-      return None
-    
-
-    # Get best comment
-    bestComment = re.sub(' +', ' ', comment.find_element(By.CLASS_NAME, 'u_cbox_contents').text.replace('\n', ' '))
-
-    # Get article
-    article = re.sub(' +', ' ', soup.find(attrs={'id': 'dic_area'}).get_text(separator=' ').strip().replace('\n', ' '))
-
-    # Remove tab from strings
-    bestComment = re.sub('\t+', ' ', bestComment)
-    article = re.sub('\t+', ' ', article)
-    
-    
-    # Formatted
-    return f'{article}\t{bestComment}\t{bestCommentLike}'
-  except Exception as e:
-    print('error!', e)
-    return None
-
-
-def get_ranking(officeId, date):
   # Get article
-  BROWSER.get(f'https://media.naver.com/press/{officeId}/ranking?type=comment&date={date}')
-  time.sleep(1)
+  BROWSER.get(articleUrl)
+  time.sleep(EXPLICIT_DELAY)
 
-  rankAnchors = BROWSER.find_element(By.CLASS_NAME, 'press_ranking_list').find_elements(By.TAG_NAME, 'a')
-  return [ra.get_attribute('href') for ra in rankAnchors]
+  # Dynamically waiting fetch
+  for _ in range(RETRY):
+    try:
+      # Check comment num
+      comment = BROWSER.find_element(By.CLASS_NAME, 'u_cbox_list')
+      commentNum = int(BROWSER.find_element(By.ID, 'comment_count').text.replace(',', ''))
+      if commentNum < 10:
+        return None
+
+      # Check comment like
+      bestCommentLike = int(comment.find_element(By.CLASS_NAME, 'u_cbox_cnt_recomm').text.replace(',', ''))
+      if bestCommentLike < 100:
+        return None
+      
+
+      # Get best comment
+      bestComment = re.sub(' +', ' ', comment.find_element(By.CLASS_NAME, 'u_cbox_contents').text.replace('\n', ' '))
+
+      # Get article
+      article = re.sub(' +', ' ', soup.find(attrs={'id': 'dic_area'}).get_text(separator=' ').strip().replace('\n', ' '))
+
+      # Remove tab from strings
+      bestComment = re.sub('\t+', ' ', bestComment)
+      article = re.sub('\t+', ' ', article)
+      
+      
+      # Formatted
+      return f'{article}\t{bestComment}\t{bestCommentLike}'
+    except Exception as e:
+      continue
 
 
 def create_dataset(officeId, startDate, endDate, savePath):
   startDate = parseDate(startDate)
   endDate = parseDate(endDate)
+  startDateString = startDate.strftime("%Y%m%d")
+  endDateString = endDate.strftime("%Y%m%d")
+  print(endDate)
 
   oneday = datetime.timedelta(days=1)
 
   # Get ranked articles
   print(COLTEX['YELLOW'] + f'[{officeId}] Get rankings...' + COLTEX['WHITE'])
   articleUrls = set()
+
+  # Check cached url
+  if not os.path.exists(f'{savePath}/rankurl-{officeId}-{startDateString}-{endDateString}.txt'):
+    
+    # Fetch ranked articles
+    BROWSER.get(f'https://media.naver.com/press/{officeId}/ranking?type=comment&date={endDateString}')
+    time.sleep(EXPLICIT_DELAY) 
+
+    with tqdm(total= (endDate - startDate).days) as pbar:
+      iterDate = endDate
+      while startDate <= iterDate:
+        for i in range(10):
+          try:
+            rankUrls = [li.find_element(By.TAG_NAME, 'a').get_attribute('href') for li in BROWSER.find_elements(By.CLASS_NAME, 'as_thumb')]
+            articleUrls.update(rankUrls)
+            break
+          except:
+            time.sleep(EXPLICIT_DELAY)
+            
+        iterDate = iterDate - oneday
+        pbar.update(1)
+        pbar.set_postfix({'searching date': iterDate, 'articles': len(articleUrls)})
+
+        while True:
+          try:
+            BROWSER.find_element(By.CLASS_NAME, 'button_date_prev').click()
+            time.sleep(EXPLICIT_DELAY)
+            break
+          except:
+            continue
+    
+    # Cache rank urls
+    with open(f'{savePath}/rankurl-{officeId}-{startDateString}-{endDateString}.txt', 'wb') as rf:
+      rf.write('\n'.join(articleUrls).encode('utf-8'))
   
-  with tqdm(total= (endDate - startDate).days) as pbar:
-    iterDate = startDate
-    while iterDate <= endDate:
-      pbar.update(1)
-      pbar.set_postfix({'searching date': iterDate})
-      dateString = iterDate.strftime("%Y%m%%d")
-      rankArticles = get_ranking(officeId, dateString)
-      articleUrls.update(rankArticles)
-      
-      iterDate = iterDate + oneday
+  else:
+    with open(f'{savePath}/rankurl-{officeId}-{startDateString}-{endDateString}.txt', 'rb') as urlf:
+      articleUrls.update(urlf.readlines())
 
   # Get articles
   print(COLTEX['YELLOW'] + f'[{officeId}] Get Articles...' + COLTEX['WHITE'])
@@ -103,7 +124,7 @@ def create_dataset(officeId, startDate, endDate, savePath):
       articles.append(article)
   
   # Save articles
-  with open(f'{savePath}/{officeId}.tsv', 'wb') as f:
+  with open(f'{savePath}/rankurl-{officeId}-{startDateString}-{endDateString}.tsv', 'wb') as f:
     f.write('\n'.join(articles).encode('utf-8'))
 
 
@@ -121,7 +142,7 @@ def create_dataset(officeId, startDate, endDate, savePath):
 
 
 if __name__ == '__main__':
-  startDate = '20200101'
+  startDate = '20221120'
   endDate =   '20221124'
   savePath =  './data'
 
